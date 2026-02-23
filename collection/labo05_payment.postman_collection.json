@@ -76,7 +76,7 @@
 					}
 				},
 				"url": {
-					"raw": "{{baseURL}}/payments-api/payments/36",
+					"raw": "{{baseURL}}/payments/process/1",
 					"host": [
 						"{{baseURL}}"
 					],
