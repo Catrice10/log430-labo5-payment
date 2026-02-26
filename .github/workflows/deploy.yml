@@ -1,0 +1,105 @@
+name: Deploy Payments Labo 05
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+    - name: Nettoyage avant checkout
+      run: |
+        sudo chown -R $USER:$USER . || true
+        docker system prune -f
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Creer fichier .env
+      run: |
+        echo "DB_HOST=mysql_payments" >> .env
+        echo "DB_PORT=3306" >> .env
+        echo "DB_NAME=labo05_payments_db" >> .env
+        echo "DB_USER=labo05" >> .env
+        echo "DB_PASSWORD=labo05" >> .env
+
+    - name: Verifier les fichiers requis 
+      run: |
+        if [ ! -f "docker-compose.yml" ]; then
+          echo "ERREUR: docker-compose.yml manquant"
+          exit 1
+        fi
+        if [ ! -f ".env" ]; then
+          echo "ERREUR: .env manquant"
+          exit 1
+        fi
+
+    - name: Creer le reseau Docker
+      run: |
+        docker network create labo05-network 2>/dev/null || true
+
+    - name: Arreter les services existants
+      run: |
+        docker compose down -v || true
+        docker volume prune -f
+
+    - name: Build et demarrage des services
+      run: |
+        docker compose up -d --build
+
+        echo "Attente de 10 secondes..."
+        sleep 10
+
+        echo "=== Etat des containers ==="
+        docker ps -a
+
+    - name: Attendre que MySQL soit pret
+      run: |
+        MAX_WAIT=180
+        ELAPSED=0
+        echo "Attente de MySQL payments..."
+        until docker exec $(docker ps -qf "name=mysql_payments") mysqladmin ping -h localhost -u root -proot --silent 2>/dev/null; do
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "ERREUR: MySQL payments n'est pas devenu healthy apres ${MAX_WAIT}s"
+            docker logs mysql_payments --tail 50
+            exit 1
+          fi
+          sleep 5
+          ELAPSED=$((ELAPSED + 5))
+        done
+        echo "MySQL payments est pret"
+
+    - name: Verifier le payments_api
+      run: |
+        sleep 5
+        if docker ps | grep -q payments_api; then
+          echo "payments_api est en cours d'execution"
+        else
+          echo "ERREUR: payments_api n'est pas en cours d'execution"
+          docker logs payments_api --tail 50
+          exit 1
+        fi
+
+    - name: Verifier le health check
+      run: |
+        sleep 5
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5009/health-check || echo "000")
+        if [ "$STATUS" = "200" ]; then
+          echo "Health check OK"
+        else
+          echo "ERREUR: Health check a echoue (status: $STATUS)"
+          exit 1
+        fi
+
+    - name: Afficher le statut final
+      if: success()
+      run: |
+        echo "=== Deploiement reussi ==="
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+    - name: Nettoyage post-deploiement
+      if: always()
+      run: |
+        docker image prune -f
+        sudo chown -R $USER:$USER .
